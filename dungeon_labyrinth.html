@@ -1,0 +1,384 @@
+
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+#gameContainer {
+  display: flex; flex-direction: column; align-items: center;
+  font-family: var(--font-mono, monospace);
+  background: #0a0a0f; color: #e0d9c8; padding: 12px; min-height: 500px;
+}
+#hud {
+  display: flex; gap: 12px; align-items: center; margin-bottom: 8px;
+  font-size: 12px; background: #12121a; border: 1px solid #2a2a3a;
+  border-radius: 8px; padding: 8px 12px; width: 100%; justify-content: center; flex-wrap: wrap;
+}
+.hearts { color: #e05060; font-size: 14px; letter-spacing: 1px; }
+#regenBar { width: 60px; height: 5px; background: #1a1a28; border-radius: 3px; overflow: hidden; display: inline-block; vertical-align: middle; margin-left: 3px; }
+#regenFill { height: 100%; width: 0%; background: #30c060; border-radius: 3px; }
+#canvas { border: 2px solid #2a2a3a; border-radius: 4px; display: block; }
+#msgBar { margin-top: 6px; font-size: 12px; color: #a0a0b0; height: 18px; text-align: center; }
+#weaponInfo {
+  margin-top: 5px; font-size: 11px; background: #12121a; border: 1px solid #2a2a3a;
+  border-radius: 6px; padding: 5px 12px; width: 100%; text-align: center; color: #c0b080;
+}
+#controls {
+  margin-top: 8px; display: grid; grid-template-columns: repeat(3,38px);
+  grid-template-rows: repeat(2,38px); gap: 4px;
+}
+#controls button {
+  background: #1a1a28; border: 1px solid #3a3a5a; color: #c0c0e0;
+  border-radius: 6px; font-size: 18px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+  user-select: none; -webkit-user-select: none;
+}
+#controls button:active { background: #2a2a40; }
+#restartBtn {
+  margin-top: 8px; background: #1a1a28; border: 1px solid #3a3a5a;
+  color: #c0c0e0; padding: 6px 20px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; font-family: var(--font-mono, monospace);
+}
+</style>
+<h2 class="sr-only">Dungeon-Labyrinth Spiel mit verschiedenen Waffen</h2>
+<div id="gameContainer">
+  <div id="hud">
+    <div><span class="hearts" id="heartsDisplay">♥♥♥♥♥♥</span></div>
+    <div style="display:flex;align-items:center;gap:3px;"><span style="color:#30c060;">❤️‍🩹</span><div id="regenBar"><div id="regenFill"></div></div></div>
+    <div id="weaponDisplay">👊 Fäuste</div>
+    <div id="killDisplay">☠️ 0</div>
+    <div id="floorDisplay">🗺️ Ebene 1</div>
+  </div>
+  <canvas id="canvas"></canvas>
+  <div id="weaponInfo" id="winfo"> </div>
+  <div id="msgBar"></div>
+  <div id="controls">
+    <div></div><button id="btnU">▲</button><div></div>
+    <button id="btnL">◀</button><button id="btnD">▼</button><button id="btnR">▶</button>
+  </div>
+  <button id="restartBtn">↺ Neu starten</button>
+</div>
+<script>
+(function(){
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const TILE=18, COLS=35, ROWS=28;
+canvas.width=COLS*TILE; canvas.height=ROWS*TILE;
+const WALL=0,FLOOR=1,START=2,EXIT=3;
+
+// Waffen mit verschiedenen Eigenschaften
+// dmg: Schaden, speed: Angriffe pro Zug (1=normal, 2=doppelt), range: Reichweite in Feldern, splash: Flächenschaden
+const WEAPONS = [
+  {name:'Fäuste',      icon:'👊', dmg:1, speed:1, range:1, splash:0, color:'#888',   desc:'Kein Angriff-Bonus'},
+  {name:'Dolch',       icon:'🗡️', dmg:2, speed:2, range:1, splash:0, color:'#80d0ff',desc:'Schnell: 2x Angriff pro Zug'},
+  {name:'Schwert',     icon:'⚔️', dmg:4, speed:1, range:1, splash:0, color:'#ffe060',desc:'Solider Nahkampf-Schaden'},
+  {name:'Speer',       icon:'🏹', dmg:3, speed:1, range:3, splash:0, color:'#80ff80',desc:'Reichweite: greift 3 Felder weit an'},
+  {name:'Kriegshammer',icon:'🔨', dmg:3, speed:1, range:1, splash:1, color:'#ffa040',desc:'Flächenschaden: trifft alle Nachbarn'},
+  {name:'Zauberstab',  icon:'🪄', dmg:3, speed:1, range:4, splash:0, color:'#c080ff',desc:'Fernkampf: 4 Felder Reichweite'},
+  {name:'Feuerball',   icon:'🔥', dmg:4, speed:1, range:3, splash:2, color:'#ff6020',desc:'Fernkampf + Flächenschaden (r=2)'},
+  {name:'Axt',         icon:'🪓', dmg:5, speed:1, range:1, splash:0, color:'#ff8060',desc:'Höchster Nahkampf-Schaden'},
+  {name:'Blitz',       icon:'⚡', dmg:6, speed:1, range:5, splash:0, color:'#ffff40',desc:'Maximale Reichweite & Schaden'},
+];
+
+const MTYPES=[
+  {name:'Ratte',   hp:2,  dmg:1, icon:'🐀', move:1},
+  {name:'Goblin',  hp:4,  dmg:2, icon:'👺', move:1},
+  {name:'Skelett', hp:5,  dmg:2, icon:'💀', move:1},
+  {name:'Ork',     hp:8,  dmg:3, icon:'👹', move:1},
+  {name:'Dämon',   hp:12, dmg:4, icon:'😈', move:2},
+];
+
+const REGEN_STEPS=12;
+let grid,monsters,chests,player,gameOver,floor=1,kills=0;
+let floatTexts=[];
+
+function generateMaze(cols,rows){
+  let g=Array.from({length:rows},()=>Array(cols).fill(WALL));
+  function carve(cx,cy){
+    let dirs=[[0,-2],[0,2],[-2,0],[2,0]].sort(()=>Math.random()-0.5);
+    for(let [dx,dy] of dirs){
+      let nx=cx+dx,ny=cy+dy;
+      if(nx>0&&nx<cols-1&&ny>0&&ny<rows-1&&g[ny][nx]===WALL){
+        g[cy+dy/2][cx+dx/2]=FLOOR;g[ny][nx]=FLOOR;carve(nx,ny);
+      }
+    }
+  }
+  g[1][1]=FLOOR;carve(1,1);return g;
+}
+function floorCells(){
+  let c=[];
+  for(let r=0;r<ROWS;r++) for(let x=0;x<COLS;x++) if(grid[r][x]!==WALL) c.push({x,y:r});
+  return c;
+}
+function dist(a,b){return Math.abs(a.x-b.x)+Math.abs(a.y-b.y);}
+function lineDist(a,b){return Math.max(Math.abs(a.x-b.x),Math.abs(a.y-b.y));}
+
+function initGame(){
+  grid=generateMaze(COLS,ROWS);
+  let cells=floorCells();
+  let sc=cells[Math.floor(Math.random()*cells.length)];
+  let ec=null,bd=0;
+  for(let i=0;i<300;i++){let c=cells[Math.floor(Math.random()*cells.length)];let d=dist(c,sc);if(d>bd){bd=d;ec=c;}}
+  grid[sc.y][sc.x]=START;grid[ec.y][ec.x]=EXIT;
+  player={x:sc.x,y:sc.y,hp:6,maxHp:6,weapon:0,invincible:0,regenSteps:0};
+  monsters=[];chests=[];floatTexts=[];gameOver=false;
+  let used=new Set([`${sc.x},${sc.y}`,`${ec.x},${ec.y}`]);
+  for(let i=0;i<8+floor*4;i++){
+    for(let t=0;t<80;t++){
+      let c=cells[Math.floor(Math.random()*cells.length)];
+      let k=`${c.x},${c.y}`;
+      if(!used.has(k)&&dist(c,sc)>6){
+        let ti=Math.min(Math.floor(Math.random()*(1+floor*0.6)),MTYPES.length-1);
+        monsters.push({x:c.x,y:c.y,hp:MTYPES[ti].hp,maxHp:MTYPES[ti].hp,type:ti});
+        used.add(k);break;
+      }
+    }
+  }
+  // Kisten mit variierteren Waffen je Ebene
+  for(let i=0;i<4+floor*2;i++){
+    for(let t=0;t<80;t++){
+      let c=cells[Math.floor(Math.random()*cells.length)];
+      let k=`${c.x},${c.y}`;
+      if(!used.has(k)&&dist(c,sc)>3){
+        // zufällige Waffe, abhängig von Ebene
+        let maxW=Math.min(1+floor,WEAPONS.length-1);
+        let wi=1+Math.floor(Math.random()*maxW);
+        if(wi>=WEAPONS.length) wi=WEAPONS.length-1;
+        chests.push({x:c.x,y:c.y,weapon:wi,open:false});
+        used.add(k);break;
+      }
+    }
+  }
+  setMsg('Finde den Ausgang 🔮! WASD oder Pfeiltasten.');
+  draw();updateHUD();
+}
+
+function setMsg(m){document.getElementById('msgBar').textContent=m;}
+function updateHUD(){
+  let h='';for(let i=0;i<player.maxHp;i++) h+=i<player.hp?'♥':'♡';
+  document.getElementById('heartsDisplay').textContent=h;
+  let w=WEAPONS[player.weapon];
+  document.getElementById('weaponDisplay').textContent=w.icon+' '+w.name;
+  document.getElementById('killDisplay').textContent='☠️ '+kills;
+  document.getElementById('floorDisplay').textContent='🗺️ Ebene '+floor;
+  let pct=player.hp>=player.maxHp?0:Math.round(player.regenSteps/REGEN_STEPS*100);
+  document.getElementById('regenFill').style.width=pct+'%';
+  document.getElementById('weaponInfo').textContent=
+    w.icon+' '+w.name+' | Schaden: '+w.dmg+(w.speed>1?' | ⚡ Schnell (x'+w.speed+'x)':'')
+    +(w.range>1?' | 📏 Reichweite: '+w.range:'')+(w.splash>0?' | 💥 Flächenschaden r='+w.splash:'')+' — '+w.desc;
+}
+
+const VIEW=8;
+function drawEmoji(e,x,y,size){
+  ctx.font=(size||13)+'px serif';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(e,x*TILE+TILE/2,y*TILE+TILE/2);
+}
+
+function draw(){
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++){
+    let dd=Math.max(Math.abs(c-player.x),Math.abs(r-player.y));
+    if(dd>VIEW){ctx.fillStyle='#07070f';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);continue;}
+    let t=grid[r][c];
+    if(t===WALL){ctx.fillStyle='#0e0e18';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);ctx.strokeStyle='rgba(40,40,70,0.4)';ctx.strokeRect(c*TILE+.5,r*TILE+.5,TILE-1,TILE-1);}
+    else if(t===EXIT){ctx.fillStyle='#1a1030';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);ctx.fillStyle='rgba(180,100,255,0.3)';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);}
+    else if(t===START){ctx.fillStyle='#0f1f18';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);}
+    else{ctx.fillStyle='#1a1a28';ctx.fillRect(c*TILE,r*TILE,TILE,TILE);}
+  }
+  for(let r=0;r<ROWS;r++) for(let c=0;c<COLS;c++)
+    if(grid[r][c]===EXIT&&Math.max(Math.abs(c-player.x),Math.abs(r-player.y))<=VIEW) drawEmoji('🔮',c,r);
+  for(let ch of chests){
+    if(ch.open) continue;
+    if(Math.max(Math.abs(ch.x-player.x),Math.abs(ch.y-player.y))>VIEW) continue;
+    let w=WEAPONS[ch.weapon];
+    // colored glow under chest
+    ctx.fillStyle=w.color+'44';
+    ctx.fillRect(ch.x*TILE,ch.y*TILE,TILE,TILE);
+    drawEmoji('📦',ch.x,ch.y);
+  }
+  for(let m of monsters){
+    if(Math.max(Math.abs(m.x-player.x),Math.abs(m.y-player.y))>VIEW) continue;
+    drawEmoji(MTYPES[m.type].icon,m.x,m.y);
+    let bw=TILE-2;
+    ctx.fillStyle='#400';ctx.fillRect(m.x*TILE+1,m.y*TILE,bw,3);
+    ctx.fillStyle='#0c0';ctx.fillRect(m.x*TILE+1,m.y*TILE,Math.round(bw*m.hp/m.maxHp),3);
+  }
+  // float texts
+  for(let f of floatTexts){
+    ctx.globalAlpha=f.life/20;
+    ctx.font='bold 11px sans-serif';ctx.textAlign='center';ctx.textBaseline='middle';
+    ctx.fillStyle=f.color||'#fff';
+    ctx.fillText(f.text,f.x*TILE+TILE/2,f.y*TILE+TILE/2-f.dy);
+    ctx.globalAlpha=1;
+  }
+  // player always last
+  let hitFlash=player.invincible>16;
+  ctx.beginPath();
+  ctx.arc(player.x*TILE+TILE/2,player.y*TILE+TILE/2,TILE/2-1,0,Math.PI*2);
+  ctx.fillStyle=hitFlash?'#6a1020':'#1e1e40';
+  ctx.fill();
+  drawEmoji('🧙',player.x,player.y);
+}
+
+function addFloat(x,y,text,color){floatTexts.push({x,y,text,color,life:20,dy:0});}
+function tickFloats(){
+  for(let f of floatTexts){f.life--;f.dy+=0.3;}
+  floatTexts=floatTexts.filter(f=>f.life>0);
+}
+
+function canWalk(x,y){
+  if(x<0||x>=COLS||y<0||y>=ROWS) return false;
+  return grid[y][x]!==WALL;
+}
+function monsterAt(x,y){return monsters.find(m=>m.x===x&&m.y===y);}
+
+function hasLineOfSight(ax,ay,bx,by){
+  let dx=bx-ax,dy=by-ay;
+  let steps=Math.max(Math.abs(dx),Math.abs(dy));
+  if(steps===0) return true;
+  for(let i=1;i<steps;i++){
+    let cx=Math.round(ax+dx*i/steps),cy=Math.round(ay+dy*i/steps);
+    if(grid[cy][cx]===WALL) return false;
+  }
+  return true;
+}
+
+function doAttack(targetX, targetY){
+  let w=WEAPONS[player.weapon];
+  let hit=false;
+  // range attack: check all monsters in direction or within range
+  if(w.splash>0){
+    // splash: hit all monsters within splash radius of target
+    for(let m of [...monsters]){
+      if(dist(m,{x:targetX,y:targetY})<=w.splash){
+        let times=w.speed;
+        while(times-->0) m.hp-=w.dmg;
+        addFloat(m.x,m.y,'-'+(w.dmg*w.speed),w.color);
+        hit=true;
+        if(m.hp<=0){kills++;monsters=monsters.filter(x=>x!==m);addFloat(m.x,m.y,'☠️','#fff');if(Math.random()<0.3)spawnMonster();}
+      }
+    }
+  } else {
+    let m=monsterAt(targetX,targetY);
+    if(m){
+      let times=w.speed;
+      while(times-->0) m.hp-=w.dmg;
+      addFloat(m.x,m.y,'-'+(w.dmg*w.speed),w.color);
+      hit=true;
+      if(m.hp<=0){kills++;monsters=monsters.filter(x=>x!==m);addFloat(m.x,m.y,'☠️','#fff');if(Math.random()<0.3)spawnMonster();}
+      else setMsg('⚔️ '+MTYPES[m.type].name+': '+m.hp+'/'+m.maxHp+' HP');
+    }
+  }
+  return hit;
+}
+
+function tryRangedAttack(dx,dy){
+  let w=WEAPONS[player.weapon];
+  if(w.range<=1) return false;
+  // shoot along direction, find first monster in range
+  for(let r=1;r<=w.range;r++){
+    let tx=player.x+dx*r, ty=player.y+dy*r;
+    if(tx<0||tx>=COLS||ty<0||ty>=ROWS) break;
+    if(grid[ty][tx]===WALL) break;
+    let m=monsterAt(tx,ty);
+    if(m||w.splash>0){
+      doAttack(tx,ty);
+      return true;
+    }
+  }
+  return false;
+}
+
+function spawnMonster(){
+  let cells=floorCells();
+  for(let t=0;t<50;t++){
+    let c=cells[Math.floor(Math.random()*cells.length)];
+    if(dist(c,player)>8&&!monsterAt(c.x,c.y)){
+      let ti=Math.min(Math.floor(Math.random()*(1+floor*0.6)),MTYPES.length-1);
+      monsters.push({x:c.x,y:c.y,hp:MTYPES[ti].hp,maxHp:MTYPES[ti].hp,type:ti});
+      return;
+    }
+  }
+}
+
+function moveMonsters(){
+  for(let m of monsters){
+    if(dist(m,player)>10) continue;
+    let dx=0,dy=0;
+    if(Math.random()<0.75){
+      if(Math.abs(player.x-m.x)>=Math.abs(player.y-m.y)) dx=Math.sign(player.x-m.x);
+      else dy=Math.sign(player.y-m.y);
+    } else {
+      let d=[[1,0],[-1,0],[0,1],[0,-1]][Math.floor(Math.random()*4)];dx=d[0];dy=d[1];
+    }
+    let nx=m.x+dx,ny=m.y+dy;
+    if(!canWalk(nx,ny)||monsterAt(nx,ny)) continue;
+    if(nx===player.x&&ny===player.y){
+      if(player.invincible>0) continue;
+      let mt=MTYPES[m.type];
+      player.hp=Math.max(0,player.hp-mt.dmg);
+      player.invincible=20;
+      player.regenSteps=0;
+      addFloat(player.x,player.y,'-'+mt.dmg,'#ff4040');
+      setMsg('😵 '+mt.name+' trifft dich! -'+mt.dmg+' HP');
+      if(player.hp<=0){gameOver=true;document.getElementById('msgBar').textContent='💀 Game Over! Kills: '+kills+' | Ebene: '+floor;}
+    } else {m.x=nx;m.y=ny;}
+  }
+}
+
+function doRegen(){
+  if(player.hp>=player.maxHp) return;
+  player.regenSteps++;
+  if(player.regenSteps>=REGEN_STEPS){
+    player.regenSteps=0;
+    player.hp=Math.min(player.maxHp,player.hp+1);
+    addFloat(player.x,player.y,'+1❤️','#30ff80');
+    setMsg('❤️‍🩹 Regeneriert! ('+player.hp+'/'+player.maxHp+')');
+  }
+}
+
+function movePlayer(dx,dy){
+  if(gameOver) return;
+  let nx=player.x+dx, ny=player.y+dy;
+  let w=WEAPONS[player.weapon];
+  // check adjacent monster first
+  let adjM=monsterAt(nx,ny);
+  if(adjM){
+    doAttack(nx,ny);
+    moveMonsters();tickFloats();draw();updateHUD();return;
+  }
+  // ranged: if can't walk or no monster adjacent but range>1, try shooting
+  if(w.range>1){
+    if(tryRangedAttack(dx,dy)){
+      moveMonsters();tickFloats();draw();updateHUD();return;
+    }
+  }
+  if(!canWalk(nx,ny)){tickFloats();draw();return;}
+  player.x=nx;player.y=ny;
+  if(player.invincible>0) player.invincible--;
+  doRegen();
+  if(grid[ny][nx]===EXIT){floor++;setMsg('⬇️ Ebene '+floor+'!');setTimeout(initGame,400);return;}
+  let ch=chests.find(c=>c.x===nx&&c.y===ny&&!c.open);
+  if(ch){
+    ch.open=true;
+    let cw=WEAPONS[ch.weapon];
+    if(ch.weapon>player.weapon){
+      player.weapon=ch.weapon;
+      setMsg('📦 '+cw.icon+' '+cw.name+' gefunden! — '+cw.desc);
+    } else {
+      setMsg('📦 '+cw.name+' — schlechter als '+WEAPONS[player.weapon].name+'.');
+    }
+  }
+  moveMonsters();tickFloats();draw();updateHUD();
+}
+
+document.addEventListener('keydown',e=>{
+  let map={ArrowUp:[0,-1],ArrowDown:[0,1],ArrowLeft:[-1,0],ArrowRight:[1,0],
+           w:[0,-1],s:[0,1],a:[-1,0],d:[1,0],W:[0,-1],S:[0,1],A:[-1,0],D:[1,0]};
+  let v=map[e.key];if(v){e.preventDefault();movePlayer(v[0],v[1]);}
+});
+document.getElementById('btnU').addEventListener('click',()=>movePlayer(0,-1));
+document.getElementById('btnD').addEventListener('click',()=>movePlayer(0,1));
+document.getElementById('btnL').addEventListener('click',()=>movePlayer(-1,0));
+document.getElementById('btnR').addEventListener('click',()=>movePlayer(1,0));
+document.getElementById('restartBtn').addEventListener('click',()=>{floor=1;kills=0;initGame();});
+setInterval(()=>{if(!gameOver&&monsters.length<20+floor*3)spawnMonster();},4000);
+initGame();
+})();
+</script>
